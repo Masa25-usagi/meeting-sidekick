@@ -1,4 +1,5 @@
 import Foundation
+import AVFoundation
 import Speech
 import CoreGraphics
 import ImageIO
@@ -87,6 +88,72 @@ struct Probe {
             }
             print("Read-only capability check; no permission requested or microphone used")
             return
+        }
+        if let audioIndex = args.firstIndex(of: "--asr-file"), args.indices.contains(audioIndex + 1) {
+            do {
+                let inputURL = URL(fileURLWithPath: args[audioIndex + 1])
+                var config = LocalTranscriber.Configuration()
+                config.silenceSeconds = 5
+                config.finalResultWaitSeconds = 5
+                config.clmWaitSeconds = 2
+                let transcriber = LocalTranscriber(configuration: config)
+                var finalEvent: TranscriptEvent?
+                var finalization: LocalSpeechFinalization?
+                var diagnostics: [String] = []
+                transcriber.onTranscript = { event in
+                    if event.isFinal { finalEvent = event }
+                }
+                transcriber.onFinalization = { _, reason in finalization = reason }
+                transcriber.onDiagnostics = { diagnostics.append($0) }
+                transcriber.onError = { diagnostics.append("ERROR: " + $0) }
+                try await transcriber.start()
+
+                let file = try AVAudioFile(forReading: inputURL)
+                let converter = PCM16Converter()
+                let chunkFrames = AVAudioFrameCount(max(1, Int(file.processingFormat.sampleRate / 10)))
+                var convertedBytes = 0
+                while file.framePosition < file.length {
+                    let remaining = file.length - file.framePosition
+                    let frames = AVAudioFrameCount(min(AVAudioFramePosition(chunkFrames), remaining))
+                    guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frames) else {
+                        throw NSError(domain: "ASRProbe", code: 1, userInfo: [NSLocalizedDescriptionKey: "音声バッファを作れませんでした"] )
+                    }
+                    try file.read(into: buffer, frameCount: frames)
+                    if let data = converter.convert(buffer) {
+                        convertedBytes += data.count
+                        transcriber.append(data, source: .microphone)
+                    }
+                }
+                transcriber.endAudio(source: .microphone)
+                let deadline = Date().addingTimeInterval(7)
+                while finalEvent == nil && Date() < deadline {
+                    try await Task.sleep(for: .milliseconds(50))
+                }
+                transcriber.stop()
+
+                print("ASR_FIXTURE file=\(inputURL.lastPathComponent) inputFormat=\(file.processingFormat) pcm16Bytes=\(convertedBytes)")
+                print("ASR_FINALIZATION \(finalization?.rawValue ?? "none")")
+                if let finalEvent {
+                    print("ASR_RAW \(finalEvent.rawTranscript)")
+                    print("ASR_TEXT \(finalEvent.text)")
+                    if let expectIndex = args.firstIndex(of: "--expect"), args.indices.contains(expectIndex + 1) {
+                        let expected = args[expectIndex + 1]
+                        let normalize: (String) -> String = { value in
+                            value.filter { !$0.isWhitespace && !$0.isPunctuation }
+                        }
+                        let matched = normalize(finalEvent.text).contains(normalize(expected))
+                        print("ASR_EXPECT \(matched ? "PASS" : "FAIL") expected=\(expected)")
+                        Foundation.exit(matched ? 0 : 2)
+                    }
+                    Foundation.exit(0)
+                }
+                for line in diagnostics { print("ASR_DIAGNOSTIC \(line)") }
+                print("ASR_FIXTURE FAIL: final result was not produced")
+                Foundation.exit(1)
+            } catch {
+                print("ASR_FIXTURE ERROR: \(error.localizedDescription)")
+                Foundation.exit(1)
+            }
         }
         if args.contains("--clm-prepare") {
             do {

@@ -907,7 +907,7 @@ final class ProtocolTests {
     /// CLI環境変数のPATH補強テスト: 既存PATHの維持、重複排除、必須パスの包含
     func testCLIEnvironmentAugmentedPathPreservesExistingAndDeduplicates() {
         let current = "/custom/tools:/usr/bin:/bin:/usr/local/bin:/usr/bin:/custom/tools"
-        let augmented = CLIEnvironment.augmentedPath(currentPath: current, homeDirectory: "/Users/dummy")
+        let augmented = CLIEnvironment.augmentedPath(currentPath: current, homeDirectory: "/Users/example")
         let parts = augmented.split(separator: ":").map(String.init)
 
         // 1. 既存PATHの先頭要素が最優先で保持されていること
@@ -925,7 +925,7 @@ final class ProtocolTests {
         }
 
         // 4. nil/空文字時でも必須パスが含まれること
-        let fallback = CLIEnvironment.augmentedPath(currentPath: nil, homeDirectory: "/Users/dummy")
+        let fallback = CLIEnvironment.augmentedPath(currentPath: nil, homeDirectory: "/Users/example")
         for required in CLIEnvironment.minimumRequiredPaths {
             expectTrue(fallback.contains(required))
         }
@@ -992,23 +992,19 @@ final class ProtocolTests {
 
     /// CLIエラー時のstderrサニタイズ（秘密情報マスクとtail抽出）テスト
     func testCLISanitizesStderrDiagnostics() {
-        // Synthetic fixtures only; construct recognizable formats without
-        // embedding token-shaped literals in the repository.
-        let fakeOpenAIKey = "sk-proj-" + String(repeating: "0", count: 24)
-        let fakeTypeSafeKey = "ts-" + String(repeating: "0", count: 16)
         let raw = """
         [INFO] Loading credentials
         Authorization: Bearer secret_token_value_12345
-        api_key: \(fakeOpenAIKey)
-        ts_key = \(fakeTypeSafeKey)
+        api_key: sk-proj-1234567890abcdefghijklmn
+        ts_key = ts-abcdef1234567890
         Error: Model 'custom-model' failed to initialize.
         Stack trace line 1
         Stack trace line 2
         """
         let sanitized = CLIOutputDiagnostics.sanitize(raw, maxBytes: 500)
         expectFalse(sanitized.contains("secret_token_value_12345"))
-        expectFalse(sanitized.contains(fakeOpenAIKey))
-        expectFalse(sanitized.contains(fakeTypeSafeKey))
+        expectFalse(sanitized.contains("sk-proj-1234567890abcdefghijklmn"))
+        expectFalse(sanitized.contains("ts-abcdef1234567890"))
         expectTrue(sanitized.contains("[REDACTED]"))
         expectTrue(sanitized.contains("Error: Model 'custom-model' failed to initialize."))
 

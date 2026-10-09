@@ -668,7 +668,7 @@ struct SettingsView: View {
                 Section("自動実行の上限") {
                     Stepper("試作は最大 \(model.settings.policy.maxJobs)件", value: $model.settings.policy.maxJobs, in: 1...10)
                     Stepper("Jev判定は最大 \(model.settings.maxJudgeCalls)回", value: $model.settings.maxJudgeCalls, in: 10...600, step: 10)
-                    Stepper("音声AIは1回最大 \(model.settings.liveSeconds)秒", value: $model.settings.liveSeconds, in: 10...120, step: 10)
+                    Stepper("音声AIは約 \(model.settings.liveSeconds)秒（返答は最後まで）", value: $model.settings.liveSeconds, in: 10...120, step: 10)
                     Stepper("会議は最大 \(model.settings.meetingMinutes)分", value: $model.settings.meetingMinutes, in: 5...120, step: 5)
                     Text("制作は1件ずつ、各5分で停止します。これらは回数・時間の制限であり、金額の保証ではありません。").font(.caption).foregroundStyle(.secondary)
                 }

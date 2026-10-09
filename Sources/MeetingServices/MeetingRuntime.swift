@@ -87,6 +87,7 @@ public final class MeetingRuntime: ObservableObject {
     private var summaryTask: Task<Void, Never>?
     private var voiceTimer: Task<Void, Never>?
     private var voiceGeneration = UUID()
+    private var voiceActivity = VoiceSessionActivity()
     private var finalEventIDs: Set<String> = []
     private var finalEventOrder: [String] = []
     private var finalEventCount = 0
@@ -199,14 +200,18 @@ public final class MeetingRuntime: ObservableObject {
     private func setupLiveCallbacks(for provider: LiveConversationProvider) {
         provider.onAudio = { [weak self, weak provider] data, rate in
             guard let self, let provider, self.activeLiveProvider === provider else { return }
+            self.voiceActivity.response(at: ProcessInfo.processInfo.systemUptime)
             self.onVoiceAudio?(data, rate)
         }
         provider.onText = { [weak self, weak provider] text in
             guard let self, let provider, self.activeLiveProvider === provider else { return }
+            self.voiceActivity.response(at: ProcessInfo.processInfo.systemUptime)
             self.currentReply += text; self.reply = self.currentReply
         }
         provider.onInterrupted = { [weak self, weak provider] in
             guard let self, let provider, self.activeLiveProvider === provider else { return }
+            self.voiceActivity.turnEnded(at: ProcessInfo.processInfo.systemUptime)
+            self.addActivity("音声割り込み", "音声AIから割り込み通知を受信しました。")
             self.currentReply = ""
             self.onVoiceInterrupted?()
         }
@@ -217,6 +222,7 @@ public final class MeetingRuntime: ObservableObject {
         }
         provider.onTurnComplete = { [weak self, weak provider] in
             guard let self, let provider, self.activeLiveProvider === provider else { return }
+            self.voiceActivity.turnEnded(at: ProcessInfo.processInfo.systemUptime)
             if !self.currentReply.isEmpty {
                 self.context.append(TranscriptEvent(text: self.currentReply, source: .assistant))
                 self.addActivity("会話", self.currentReply)
@@ -226,6 +232,7 @@ public final class MeetingRuntime: ObservableObject {
         }
         provider.onToolCall = { [weak self, weak provider] name, args, callId in
             guard let self, let provider, self.activeLiveProvider === provider, self.liveActive else { return }
+            self.voiceActivity.response(at: ProcessInfo.processInfo.systemUptime)
             self.onVoiceToolCall?(name, args, callId)
             if name == "build_prototype", let topic = (args["topic"] as? String) ?? (args["prompt"] as? String) {
                 self.addActivity("AI試作提案", "音声AIから試作提案がありました: \(topic)")
@@ -358,7 +365,9 @@ public final class MeetingRuntime: ObservableObject {
         let localWake = explicitlyAddressed ? result.wakeScore : 0
         if !demoMode, settings.useJev {
             guard judgeCalls < settings.maxJudgeCalls else {
-                if localWake > 0 { await wakeVoice(prompt: event.text) }
+                if localWake > 0 {
+                    if !liveActive || event.source == .manual { await wakeVoice(prompt: event.text) }
+                }
                 else { addActivity("上限", "自動判断は上限に達しました。名前での呼びかけは使えます。") }
                 return
             }
@@ -371,7 +380,11 @@ public final class MeetingRuntime: ObservableObject {
                 result = try await judge.evaluate(event: event, context: handoff, policy: settings.policy, apiKey: jevKey, endpoint: endpoint, model: settings.judgeModel)
             } catch {
                 guard !Task.isCancelled, token == sessionID, currentEpoch == workEpoch else { return }
-                if localWake > 0 { await wakeVoice(prompt: event.text) }
+                if localWake > 0 {
+                    // Live already receives this utterance as audio. Sending its
+                    // delayed STT again would interrupt/restart the same reply.
+                    if !liveActive || event.source == .manual { await wakeVoice(prompt: event.text) }
+                }
                 else {
                     errorMessage = error.localizedDescription
                     addActivity("接続", "自動判断に接続できませんでした。名前で呼びかけると会話できます。")
@@ -425,7 +438,8 @@ public final class MeetingRuntime: ObservableObject {
             if !liveActive || event.source == .manual { await wakeVoice(prompt: event.text) }
         case .speak:
             onLiveWakeRequested?(event.text)
-            if Date().timeIntervalSince(lastHumanSpeech) > 1 { await wakeVoice(prompt: "次の発言に、役に立つ短い一言だけ返してください: " + event.text) }
+            if !voiceActivity.replyPending, !voiceActivity.playbackActive,
+               Date().timeIntervalSince(lastHumanSpeech) > 1 { await wakeVoice(prompt: "次の発言に、役に立つ短い一言だけ返してください: " + event.text) }
         case .researchTerm:
             startTerminologyResearch(evidenceText: event.text, evidenceID: event.id)
         }
@@ -780,18 +794,21 @@ public final class MeetingRuntime: ObservableObject {
                 guard token == sessionID, epoch == workEpoch, generation == voiceGeneration else { return }
                 guard !Task.isCancelled else { closeVoice(); return }
                 liveActive = true; liveStarts += 1
+                voiceActivity.begin(at: ProcessInfo.processInfo.systemUptime)
                 voiceTimer?.cancel()
-                let duration = min(120, max(10, settings.liveSeconds))
                 let timerGeneration = generation
                 voiceTimer = Task { [weak self] in
-                    try? await Task.sleep(nanoseconds: UInt64(duration) * 1_000_000_000)
-                    guard !Task.isCancelled, self?.sessionID == token, self?.voiceGeneration == timerGeneration else { return }
-                    self?.closeVoice(); self?.addActivity("待機", "音声AIを待機に戻しました。")
+                    while !Task.isCancelled {
+                        do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
+                        guard let self, self.sessionID == token, self.voiceGeneration == timerGeneration else { return }
+                        self.checkVoiceIdle(at: ProcessInfo.processInfo.systemUptime)
+                    }
                 }
             }
             guard !Task.isCancelled, token == sessionID, epoch == workEpoch, generation == voiceGeneration else { return }
             currentReply = ""
             reply = ""
+            voiceActivity.request(at: ProcessInfo.processInfo.systemUptime)
             if isGemini, settings.sendScreen, let frame = lastFrame, Date().timeIntervalSince(lastFrameTime) < 3 {
                 try await provider.sendFrame(frame); sentFrames += 1
             }
@@ -807,6 +824,7 @@ public final class MeetingRuntime: ObservableObject {
     public func closeVoice() {
         voiceGeneration = UUID()
         voiceTimer?.cancel(); voiceTimer = nil
+        voiceActivity = VoiceSessionActivity()
         // Invalidate callbacks before disconnect, which may itself deliver an error.
         activeLiveProvider = nil
         liveActive = false; connecting = false
@@ -814,6 +832,34 @@ public final class MeetingRuntime: ObservableObject {
         openaiLive.disconnect()
         currentReply = ""
         onVoiceInterrupted?()
+    }
+
+    /// Called by the real playback completion callback, not server turnComplete.
+    public func setVoicePlaybackActive(_ active: Bool) {
+        guard liveActive else { return }
+        voiceActivity.playback(active, at: ProcessInfo.processInfo.systemUptime)
+    }
+
+    public func noteHumanSpeech(source: AudioSource) {
+        lastHumanSpeech = Date()
+        let liveSource: AudioSource = settings.liveInputSource == "meeting" ? .meeting : .microphone
+        if liveActive, source == liveSource {
+            voiceActivity.humanSpeech(at: ProcessInfo.processInfo.systemUptime)
+        }
+    }
+
+    func checkVoiceIdle(at now: TimeInterval) {
+        guard liveActive else { return }
+        switch voiceActivity.expiry(at: now, sessionSeconds: Double(min(120, max(10, settings.liveSeconds)))) {
+        case .waiting: return
+        case .idle:
+            closeVoice()
+            addActivity("待機", "会話と音声再生が終わり、音声AIを待機に戻しました。")
+        case .stalledResponse:
+            closeVoice()
+            errorMessage = "音声AIの応答が止まったため接続を閉じました。もう一度呼びかけてください。"
+            addActivity("音声接続", "応答・再生のない状態が続いたため切断しました。")
+        }
     }
 
     @discardableResult

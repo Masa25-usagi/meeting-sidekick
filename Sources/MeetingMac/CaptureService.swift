@@ -3,6 +3,7 @@ import AVFoundation
 import Combine
 import CoreImage
 import MeetingCore
+import MeetingServices
 import ScreenCaptureKit
 
 struct CaptureApplication: Identifiable, Hashable {
@@ -328,31 +329,5 @@ private final class CaptureReceiver: NSObject, SCStreamOutput, SCStreamDelegate 
             self.lock.unlock()
             if enabled { self.deliver?(value) }
         }
-    }
-}
-
-private final class PCM16Converter {
-    private var converter: AVAudioConverter?
-    private var inputFormat: AVAudioFormat?
-    private let outputFormat = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: true)!
-
-    func convert(_ buffer: AVAudioPCMBuffer) -> Data? {
-        if inputFormat != buffer.format {
-            inputFormat = buffer.format
-            converter = AVAudioConverter(from: buffer.format, to: outputFormat)
-        }
-        guard let converter else { return nil }
-        let capacity = AVAudioFrameCount(ceil(Double(buffer.frameLength) * 16_000 / buffer.format.sampleRate) + 32)
-        guard let output = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: capacity) else { return nil }
-        var provided = false
-        var error: NSError?
-        converter.convert(to: output, error: &error) { _, status in
-            if provided { status.pointee = .noDataNow; return nil }
-            provided = true
-            status.pointee = .haveData
-            return buffer
-        }
-        guard error == nil, let samples = output.int16ChannelData?.pointee else { return nil }
-        return Data(bytes: samples, count: Int(output.frameLength) * 2)
     }
 }

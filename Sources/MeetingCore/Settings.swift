@@ -141,7 +141,7 @@ public enum KeyStore: Sendable {
         if SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess, let data = item as? Data { return String(decoding: data, as: UTF8.self) }
         let variable = account == "gemini" ? "GEMINI_API_KEY" : (account == "openai" ? "OPENAI_API_KEY" : "TYPESAFE_API_KEY")
         if let value = ProcessInfo.processInfo.environment[variable], !value.isEmpty { return value }
-        let envFile = AppPaths.project.appendingPathComponent(".env.local")
+        let envFile = AppPaths.project.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent(".env.local")
         guard let content = try? String(contentsOf: envFile, encoding: .utf8) else { return "" }
         for line in content.components(separatedBy: .newlines) {
             let parts = line.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)

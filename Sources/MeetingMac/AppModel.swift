@@ -19,6 +19,7 @@ final class AppModel: ObservableObject {
     private var contextScanTask: Task<Void, Never>?
     private var droppedVoiceBytes = 0
     private var lastVoiceDropReport = Date.distantPast
+    private var playbackInputGate = PlaybackInputGate()
     @Published private(set) var credentialsLoading = false
 
     @Published var selectedApplicationID: Int32 = 0
@@ -73,6 +74,11 @@ final class AppModel: ObservableObject {
         runtime.onVoiceInterrupted = { [weak self] in
             self?.player.stop()
         }
+        player.onPlaybackStateChanged = { [weak self] active in
+            guard let self else { return }
+            self.playbackInputGate.playbackChanged(active, at: ProcessInfo.processInfo.systemUptime)
+            self.runtime.setVoicePlaybackActive(active)
+        }
         runtime.$liveActive.removeDuplicates().sink { [weak self] active in
             if !active { self?.audioForwarder.stop() }
         }.store(in: &subscriptions)
@@ -98,9 +104,10 @@ final class AppModel: ObservableObject {
 
         capture.onAudio = { [weak self] data, source in self?.acceptAudio(data, source: source) }
         capture.onFrame = { [weak self] frame in self?.acceptFrame(frame) }
-        capture.onSpeechActivity = { [weak self] _ in
+        capture.onSpeechActivity = { [weak self] source in
             guard let self else { return }
-            self.runtime.lastHumanSpeech = Date()
+            guard !self.playbackInputGate.suppresses(source, at: ProcessInfo.processInfo.systemUptime) else { return }
+            self.runtime.noteHumanSpeech(source: source)
         }
 
         transcriber.onTranscript = { [weak self] event in self?.receive(event) }
@@ -247,10 +254,9 @@ final class AppModel: ObservableObject {
 
     private func acceptAudio(_ data: Data, source: AudioSource) {
         guard running else { return }
-        // Remote Meet audio does not include this process's playback. Continue
-        // transcribing it during a reply so the phone can interrupt or end it.
-        if source == .meeting || !player.isPlaying { transcriber.append(data, source: source) }
-        if settings.mixMicrophone, source == .microphone,
+        let suppressMic = playbackInputGate.suppresses(source, at: ProcessInfo.processInfo.systemUptime)
+        if !suppressMic { transcriber.append(data, source: source) }
+        if !suppressMic, settings.mixMicrophone, source == .microphone,
            let device = player.outputDevices.first(where: { $0.id == player.selectedOutputDeviceID }), device.isVirtual {
             micPlayer.selectedOutputDeviceID = device.id; micPlayer.enqueue(data: data, sampleRate: 16_000)
         }
@@ -258,7 +264,9 @@ final class AppModel: ObservableObject {
             provider: liveActive ? runtime.activeLiveProvider : nil,
             source: settings.liveInputSource == "meeting" ? .meeting : .microphone
         )
-        audioForwarder.append(data, source: source)
+        // Maintain PCM timing and server VAD silence without leaking speaker
+        // output back into the conversation. Remote Meet audio is unaffected.
+        audioForwarder.append(suppressMic ? Data(repeating: 0, count: data.count) : data, source: source)
     }
 
     private func acceptFrame(_ frame: Data) {

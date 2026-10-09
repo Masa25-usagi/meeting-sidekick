@@ -2,6 +2,7 @@ import AVFoundation
 import AudioToolbox
 import CoreAudio
 import Combine
+import MeetingServices
 
 struct AudioOutputDevice: Identifiable, Hashable {
     let id: UInt32
@@ -15,10 +16,11 @@ final class PCMPlayer: ObservableObject {
     @Published var outputDevices: [AudioOutputDevice] = []
     @Published var selectedOutputDeviceID: UInt32? { didSet { if oldValue != selectedOutputDeviceID { stop() } } }
     @Published var errorMessage: String?
+    var onPlaybackStateChanged: ((Bool) -> Void)?
     private var engine: AVAudioEngine?
     private var player: AVAudioPlayerNode?
     private var currentRate: Double = 0
-    private var queuedSeconds: Double = 0
+    private var queue = PCMPlaybackQueue()
     private var epoch = UUID()
 
     init() { refreshOutputDevices() }
@@ -46,7 +48,7 @@ final class PCMPlayer: ObservableObject {
     }
 
     func enqueue(data: Data, sampleRate: Double = 24_000) {
-        guard !data.isEmpty, data.count % 2 == 0, sampleRate > 0 else { return }
+        guard !data.isEmpty, data.count % 2 == 0, sampleRate.isFinite, (8_000...96_000).contains(sampleRate) else { return }
         do {
             if engine == nil || currentRate != sampleRate {
                 stop()
@@ -61,23 +63,33 @@ final class PCMPlayer: ObservableObject {
                 self.engine = engine; self.player = player; currentRate = sampleRate
             }
             let duration = Double(data.count / 2) / sampleRate
-            guard queuedSeconds + duration < 20 else { stop(); errorMessage = "音声再生が追いつかないため停止しました。"; return }
             let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
             guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(data.count / 2)), let target = buffer.floatChannelData?[0] else { return }
+            let wasPlaying = isPlaying
+            guard queue.reserve(duration) else {
+                errorMessage = "音声の再生待ちが3分を超えました。受信済みの声を再生してから、もう一度呼びかけてください。"
+                return
+            }
             buffer.frameLength = buffer.frameCapacity
             data.withUnsafeBytes { raw in
                 for i in 0..<Int(buffer.frameLength) { target[i] = Float(Int16(littleEndian: raw.loadUnaligned(fromByteOffset: i * 2, as: Int16.self))) / 32768 }
             }
-            queuedSeconds += duration
+            if !wasPlaying { onPlaybackStateChanged?(true) }
             let token = epoch
             player?.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
-                Task { @MainActor in if let self, self.epoch == token { self.queuedSeconds = max(0, self.queuedSeconds - duration) } }
+                Task { @MainActor in
+                    guard let self, self.epoch == token else { return }
+                    self.queue.played(duration)
+                    if !self.isPlaying { self.onPlaybackStateChanged?(false) }
+                }
             }
         } catch { errorMessage = "音声出力を開始できません: \(error.localizedDescription)"; stop() }
     }
 
-    var isPlaying: Bool { queuedSeconds > 0.05 }
+    var isPlaying: Bool { queue.seconds > 0.000_001 }
     func stop() {
-        epoch = UUID(); player?.stop(); engine?.stop(); player = nil; engine = nil; queuedSeconds = 0
+        let wasPlaying = isPlaying
+        epoch = UUID(); player?.stop(); engine?.stop(); player = nil; engine = nil; queue.reset()
+        if wasPlaying { onPlaybackStateChanged?(false) }
     }
 }
