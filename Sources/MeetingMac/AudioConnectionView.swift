@@ -17,7 +17,7 @@ struct AudioConnectionView: View {
             Text("いつものMeetのまま、声が届くか確かめます。")
                 .foregroundStyle(.secondary)
             Form {
-                Section("どこから話しますか？") {
+                Section {
                     Picker("話す場所", selection: $model.settings.liveInputSource) {
                         Text("Macから").tag("microphone")
                         Text("iPhone・会議から").tag("meeting")
@@ -31,8 +31,10 @@ struct AudioConnectionView: View {
                         Text("iPhoneも同じMeetに入り、そこで話してください。Macのマイクは使いません。")
                             .font(.caption).foregroundStyle(.secondary)
                     }
+                } header: {
+                    Label("どこから話しますか？", systemImage: "mic")
                 }
-                Section("返事を届ける先") {
+                Section {
                     Picker("AIの声", selection: Binding(get: { model.player.selectedOutputDeviceID ?? 0 }, set: {
                         model.player.selectedOutputDeviceID = $0 == 0 ? nil : $0
                         model.receivedVoiceAudio = false; heardReply = false
@@ -44,8 +46,10 @@ struct AudioConnectionView: View {
                          ? "iPhoneにも返すには、仮想出力を選び、Meetのマイクを同じデバイスにします。Meetの設定は自動では変えません。"
                          : "イヤホンを使うと、相棒の声がマイクに戻りにくくなります。")
                         .font(.caption).foregroundStyle(.secondary)
+                } header: {
+                    Label("返事を届ける先", systemImage: "speaker.wave.2")
                 }
-                Section("声の往復を確認") {
+                Section {
                     inputRow("Macの声", source: .microphone, level: model.capture.microphoneLevel,
                              lastAudio: model.capture.lastMicrophoneAudioAt)
                     inputRow("iPhone・会議の声", source: .meeting, level: model.capture.meetingLevel,
@@ -72,12 +76,20 @@ struct AudioConnectionView: View {
                         Text("「一緒に聞く」を押して、ひとこと話してください。")
                             .font(.caption).foregroundStyle(.secondary)
                     }
+                } header: {
+                    Label("声の往復を確認", systemImage: "waveform")
                 }
             }.formStyle(.grouped)
-            if let error = model.errorMessage { Text(error).font(.caption).foregroundStyle(.orange).lineLimit(4) }
+            if let error = model.errorMessage {
+                Label {
+                    Text(error).lineLimit(4)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                }.font(.caption).foregroundStyle(.orange)
+            }
             HStack {
                 if model.running || model.starting {
-                    Button("停止") { Task { await model.stopMeeting() } }
+                    Button("停止") { Task { await model.stopMeeting() } }.buttonStyle(.bordered)
                 }
                 Spacer()
                 if model.running {
@@ -104,17 +116,25 @@ struct AudioConnectionView: View {
     }
 
     private func inputRow(_ title: String, source: AudioSource, level: Float, lastAudio: Date?) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        let receiving = lastAudio != nil && Date().timeIntervalSince(lastAudio!) < 3
+        let status = lastAudio == nil ? "未受信" : (receiving ? "音声データ受信" : "音声が途切れています")
+        let heard = model.events.last(where: { $0.source == source && !$0.text.isEmpty })?.text
+        return VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(title)
                 Spacer()
                 ProgressView(value: Double(min(1, level * 5))).frame(width: 75)
-                Text(lastAudio == nil ? "未受信" : (Date().timeIntervalSince(lastAudio!) < 3 ? "音声データ受信" : "音声が途切れています"))
+                Circle()
+                    .fill(lastAudio == nil ? Color.secondary.opacity(0.4) : (receiving ? Color.green : Color.orange))
+                    .frame(width: 7, height: 7)
+                    .accessibilityHidden(true)
+                Text(status)
                     .font(.caption).foregroundStyle(.secondary)
             }
-            if let event = model.events.last(where: { $0.source == source && !$0.text.isEmpty }) {
-                Text("聞き取った言葉：\(event.text)").font(.caption).lineLimit(2)
+            if let heard {
+                Text("聞き取った言葉：\(heard)").font(.caption).lineLimit(2)
             }
         }.accessibilityElement(children: .combine)
+            .accessibilityLabel("\(title)、\(status)" + (heard.map { "、聞き取った言葉：\($0)" } ?? ""))
     }
 }
