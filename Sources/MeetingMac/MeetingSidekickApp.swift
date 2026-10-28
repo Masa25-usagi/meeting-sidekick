@@ -100,6 +100,7 @@ struct MainView: View {
                         Text(error).font(.caption).textSelection(.enabled)
                         Spacer()
                         Button { model.errorMessage = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain)
+                            .accessibilityLabel("エラーを閉じる")
                     }
                     .padding(10)
                     .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
@@ -408,6 +409,7 @@ struct MainView: View {
                         if model.events.isEmpty {
                             VStack(alignment: .leading, spacing: 12) {
                                 Image(systemName: "ear").font(.system(size: 36)).foregroundStyle(accent.opacity(0.7))
+                                    .accessibilityHidden(true)
                                 Text("必要なときに、参加します。").font(.title3.bold())
                                 Text("会話を文字にして、呼びかけやアイデアを判断します。\nまず「デモ」で動きを確認できます。").foregroundStyle(.secondary).lineSpacing(5)
                             }.padding(.vertical, 40).frame(maxWidth: .infinity, alignment: .leading)
@@ -465,9 +467,10 @@ struct MainView: View {
                 withAnimation { showComposer.toggle() }
             } label: {
                 Image(systemName: showComposer ? "keyboard.chevron.compact.down" : "keyboard")
-                    .font(.system(size: 13))
+                    .font(.callout)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(showComposer ? "手動テキスト入力を隠す" : "手動テキスト入力を表示")
             .help("手動テキスト入力を表示/非表示")
         }
         .padding(.horizontal, 4)
@@ -513,7 +516,7 @@ struct DiagnosticsView: View {
                                             Text(row.kind).font(.caption.bold())
                                             Text(row.time, style: .time).font(.caption2).foregroundStyle(.tertiary)
                                         }
-                                        Text(row.message).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary).textSelection(.enabled)
+                                        Text(row.message).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary).textSelection(.enabled)
                                     }
                                 }
                                 .padding(.vertical, 2)
@@ -557,7 +560,7 @@ struct SettingsView: View {
     @State private var jev = ""
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("接続と設定").font(.title2.bold())
+            Label("接続と設定", systemImage: "gearshape").font(.title2.bold())
             Form {
                 Section("今日の会議") {
                     TextEditor(text: $model.settings.policy.objective)
@@ -786,7 +789,7 @@ struct ContextStudioView: View {
                     if !model.scannedContext.projectSummary.isEmpty {
                         GroupBox("📄 読み込まれた設計書・ドキュメント") {
                             Text(model.scannedContext.projectSummary)
-                                .font(.system(size: 12, design: .monospaced))
+                                .font(.system(.callout, design: .monospaced))
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .textSelection(.enabled)
                         }
@@ -810,7 +813,7 @@ struct ContextStudioView: View {
                     if !model.scannedContext.recentLogs.isEmpty {
                         GroupBox("📜 Git最近のコミット履歴") {
                             Text(model.scannedContext.recentLogs)
-                                .font(.system(size: 11, design: .monospaced))
+                                .font(.system(.caption, design: .monospaced))
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
@@ -842,7 +845,7 @@ struct ContextStudioView: View {
                             model.mobileReceiver.regenerateToken()
                         } label: {
                             Image(systemName: "arrow.triangle.2.circlepath").font(.caption2)
-                        }.buttonStyle(.plain).help("PINを再生成")
+                        }.buttonStyle(.plain).accessibilityLabel("PINを再生成").help("PINを再生成")
 
                         Spacer()
                         let authUrl = "http://\(model.mobileReceiver.localIPAddress):\(model.mobileReceiver.port)/?pin=\(model.mobileReceiver.pairingToken)"
@@ -917,25 +920,25 @@ struct ContextStudioView: View {
 
                     GroupBox("💬 ツッコミ・発言を入れる基準（1行に1つ）") {
                         TextEditor(text: $speakCriteriaText)
-                            .font(.system(size: 12))
+                            .font(.callout)
                             .frame(height: 70)
                     }
 
                     GroupBox("🛠️ 自動試作（Webアプリ実装）に着手する基準（1行に1つ）") {
                         TextEditor(text: $buildCriteriaText)
-                            .font(.system(size: 12))
+                            .font(.callout)
                             .frame(height: 70)
                     }
 
                     GroupBox("🚫 絶対に自動試作しない・見送り基準（1行に1つ）") {
                         TextEditor(text: $doNotBuildCriteriaText)
-                            .font(.system(size: 12))
+                            .font(.callout)
                             .frame(height: 70)
                     }
 
                     GroupBox("📚 プロジェクト・文脈要約") {
                         TextEditor(text: $model.settings.policy.projectContext)
-                            .font(.system(size: 12))
+                            .font(.callout)
                             .frame(height: 60)
                     }
                 }
